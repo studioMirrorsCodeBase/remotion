@@ -1,0 +1,12 @@
+{
+  "name": "Remotion",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y libnss3 libdbus-1-3 libatk1.0-0 libasound2 libxrandr2 libxkbcommon-dev libxfixes3 libxcomposite1 libxdamage1 libgbm-dev libcups2 ffmpeg && npm install && npx remotion browser ensure",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {"label": "Remotion Studio", "onAutoForward": "openBrowser"}
+  },
+  "customizations": {
+    "vscode": {"extensions": ["esbenp.prettier-vscode"]}
+  }
+}

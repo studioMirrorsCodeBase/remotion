@@ -1,0 +1,25 @@
+{
+  "name": "remotion-starter",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "remotion studio",
+    "build": "remotion render HelloWorld out/hello.mp4",
+    "sketch": "remotion render PencilSketch out/sketch.mp4",
+    "curve": "remotion render VideoCurve out/curve.mp4",
+    "edit": "remotion render DanceEdit out/edit.mp4",
+    "edit2": "remotion render DanceEdit2 out/edit2.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "@remotion/google-fonts": "^4.0.0",
+    "@remotion/media-utils": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "typescript": "^5.4.0"
+  }
+}
