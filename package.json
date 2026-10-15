@@ -8,7 +8,9 @@
     "sketch": "remotion render PencilSketch out/sketch.mp4",
     "curve": "remotion render VideoCurve out/curve.mp4",
     "edit": "remotion render DanceEdit out/edit.mp4",
-    "edit2": "remotion render DanceEdit2 out/edit2.mp4"
+    "edit2": "remotion render DanceEdit2 out/edit2.mp4",
+    "natasha": "remotion render NatashaEdit out/natasha.mp4",
+    "bubble": "remotion render NatashaBubble out/bubble.mp4 --concurrency=2"
   },
   "dependencies": {
     "@remotion/cli": "^4.0.0",

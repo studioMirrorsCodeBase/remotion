@@ -1,5 +1,5 @@
 import {useMemo} from "react";
-import {AbsoluteFill, Easing, interpolate, OffthreadVideo, staticFile, useCurrentFrame, useVideoConfig} from "remotion";
+import {AbsoluteFill, Easing, interpolate, OffthreadVideo, random, staticFile, useCurrentFrame, useVideoConfig} from "remotion";
 import {loadFont} from "@remotion/google-fonts/Poppins"; // same font as before
 import {cellRect} from "./gridCell";
 
@@ -39,10 +39,22 @@ const ZOOM_SCALES = (() => {
 const ARROW_TO = "B6";
 const ARROW_FROM = "E6"; // arrow starts just left of this cell, name sits to its right
 
-// ---- ASCII loading circle: fills clockwise over the whole video ----
-const LOADER_CELLS = ["I3", "L3", "I7", "L7"]; // corners of its box; the circle fits inside
-const LOADER_END = 21.73; // seconds: fully loaded
-const LOADER_CHARS = 24; // characters across the circle
+// ---- ASCII loading bar (bottom right): fills left to right over the whole video ----
+const LOADER_CELLS = ["K14", "O14"]; // bar runs from the left edge of the first cell to the right edge of the last
+const LOADER_END = 21.73; // seconds: 100% reached -> video fades out
+const LOADER_CHARS = 18; // characters in the bar
+const PCT_COLS = 4; // character widths reserved for the "73%" label at the left end
+const BACKING = MAIN; // darkest accent color sits behind the loader
+
+// ---- Ending: video fades to 0, then the circle scrambles into this text ----
+const FADE = 0.7; // seconds: video + all texts fade to zero opacity after 100%
+const FINAL_LINES = ["studio", "mirrors"];
+const FINAL_SIZE = 0.7; // font size of the final text in cells
+const SCRAMBLE_START = LOADER_END + FADE + 0.2; // seconds
+const MOVE = 0.7; // seconds: characters fly to their letter spots
+const MARGIN = 0.4; // cells: keep the final text this far from the frame edge
+const RESOLVE_END = SCRAMBLE_START + 1.5; // seconds: last letter locks in
+const SCRAMBLE_CHARS = "abcdefghijklmnopqrstuvwxyz#+*o.";
 
 const STAY = 999; // out = STAY keeps a text until the end
 
@@ -149,30 +161,38 @@ export const DanceEdit2 = () => {
     const ctrl = {x: (tip.x + tail.x) / 2, y: tail.y - cw * 0.6}; // slight upward bow
     const angle = (Math.atan2(tip.y - ctrl.y, tip.x - ctrl.x) * 180) / Math.PI;
     console.log(`[DanceEdit2] zoom origins ${origins.map((o) => `${o.x.toFixed(0)},${o.y.toFixed(0)}`).join(" | ")} | arrow ${ARROW_FROM}->${ARROW_TO}`);
-    // ASCII loader: characters on a grid, kept where they fall inside the circle
+    // ASCII loading bar: one row of characters with the percentage at its left end
     const lr = LOADER_CELLS.map((c) => cellRect(c, width, height, N));
     const bx0 = Math.min(...lr.map((q) => q.x));
     const bx1 = Math.max(...lr.map((q) => q.x + q.w));
-    const by0 = Math.min(...lr.map((q) => q.y));
-    const by1 = Math.max(...lr.map((q) => q.y + q.h));
-    const D = Math.min(bx1 - bx0, by1 - by0);
-    const lcx = (bx0 + bx1) / 2;
-    const lcy = (by0 + by1) / 2;
+    const lcy = lr[0].cy;
+    const barW = bx1 - bx0;
     const cols = LOADER_CHARS;
-    const rows = Math.round(cols * 0.6); // characters are taller than wide
-    const dots: {x: number; y: number; ring: boolean; f: number; k: number}[] = [];
-    for (let r = 0; r < rows; r++)
-      for (let c = 0; c < cols; c++) {
-        const nx = ((c + 0.5) / cols) * 2 - 1;
-        const ny = ((r + 0.5) / rows) * 2 - 1;
-        const rad = Math.hypot(nx, ny);
-        if (rad > 1 || rad < 0.32) continue; // circle only, hole in the middle for the percentage
-        let a = Math.atan2(nx, -ny); // 0 at the top, clockwise
-        if (a < 0) a += 2 * Math.PI;
-        dots.push({x: lcx + (nx * D) / 2, y: lcy + (ny * D) / 2, ring: rad > 0.78, f: a / (2 * Math.PI), k: r + c});
-      }
-    console.log(`[DanceEdit2] loader box ${LOADER_CELLS.join(",")} -> circle ${D.toFixed(0)}px at ${lcx.toFixed(0)},${lcy.toFixed(0)} with ${dots.length} characters`);
-    const loader = {dots, font: (D / cols) * 1.25, lcx, lcy, D};
+    const step = barW / (cols + PCT_COLS);
+    const font = step * 1.25;
+    const dots = Array.from({length: cols}, (_, c) => ({x: bx0 + (PCT_COLS + c + 0.5) * step, y: lcy, f: (c + 1) / cols, k: c}));
+    const lcx = (bx0 + bx1) / 2;
+    const bw0 = barW + step * 2; // backing pill around the bar
+    const bh0 = font * 2.2;
+    console.log(`[DanceEdit2] loader bar ${LOADER_CELLS.join("-")} -> ${barW.toFixed(0)}px wide at y=${lcy.toFixed(0)} with ${cols} characters`);
+
+    // Final text: kept inside the frame, anchored toward the bottom right
+    const fFont = FINAL_SIZE * Math.min(cw, height / N * 1.6);
+    const fLineH = fFont * 1.15;
+    const longest = Math.max(...FINAL_LINES.map((l) => l.length));
+    const pillW = longest * fFont * ADV + fFont * 1.2;
+    const pillH = FINAL_LINES.length * fLineH + fFont * 0.8;
+    const m = MARGIN * cw;
+    const fcx = Math.min(lcx, width - pillW / 2 - m);
+    const fcy = Math.min(lcy, height - pillH / 2 - m);
+    const slots: {ch: string; x: number; y: number}[] = [];
+    FINAL_LINES.forEach((line, li) =>
+      Array.from(line).forEach((ch, i, arr) => slots.push({ch, x: fcx + (i - (arr.length - 1) / 2) * fFont * ADV, y: fcy + (li - (FINAL_LINES.length - 1) / 2) * fLineH})),
+    );
+    const target = new Map<number, number>(); // bar character index -> slot index
+    slots.forEach((_, j) => target.set(Math.floor(((j + 0.5) * dots.length) / slots.length), j));
+    console.log(`[DanceEdit2] scramble: ${slots.length} letters, final font=${fFont.toFixed(0)}px, pill ${pillW.toFixed(0)}x${pillH.toFixed(0)} at ${fcx.toFixed(0)},${fcy.toFixed(0)}`);
+    const loader = {dots, font, lcx, lcy, bx0, step, bw0, bh0, slots, target, fFont, pillW, pillH, fcx, fcy};
 
     return {cw, origins, tip, tail, ctrl, angle, loader, laid: ITEMS.map((it) => layout(it, width, height))};
   }, [width, height]);
@@ -200,17 +220,35 @@ export const DanceEdit2 = () => {
   const hs = geo.cw * 0.4;
 
   const prog = interpolate(t, [0, LOADER_END], [0, 1], clamp); // loader progress 0..1
+  const fadeAll = interpolate(t, [LOADER_END, LOADER_END + FADE], [1, 0], clamp); // video + texts fade to zero after 100%
+  const scr = t >= SCRAMBLE_START; // scramble phase
+  const move = interpolate(t, [SCRAMBLE_START, SCRAMBLE_START + MOVE], [0, 1], {...clamp, easing: Easing.inOut(Easing.cubic)});
+  const percentOp = interpolate(t, [SCRAMBLE_START - 0.15, SCRAMBLE_START + 0.1], [1, 0], clamp);
+  const L = geo.loader;
+  const bw = L.bw0 + (L.pillW - L.bw0) * move; // backing morphs from the bar pill to a pill that fits the text
+  const bh = L.bh0 + (L.pillH - L.bh0) * move;
+  const bcx = L.lcx + (L.fcx - L.lcx) * move;
+  const bcy = L.lcy + (L.fcy - L.lcy) * move;
+  if (frame === Math.round(LOADER_END * fps)) console.log(`[DanceEdit2] 100% -> everything fades out`);
+  if (frame === Math.round(SCRAMBLE_START * fps)) console.log(`[DanceEdit2] scramble starts`);
+  if (frame === Math.round(RESOLVE_END * fps)) console.log(`[DanceEdit2] "${FINAL_LINES.join(" ")}" fully spelled`);
   if (frame % 30 === 0) console.log(`[DanceEdit2] loader ${Math.round(prog * 100)}%`);
 
   return (
     <AbsoluteFill style={{background: "black"}}>
-      <AbsoluteFill style={{transform: `scale(${zoom})`, transformOrigin: `${origin.x}px ${origin.y}px`}}>
-        <OffthreadVideo src={staticFile(VIDEO2)} style={{width, height}} />
-      </AbsoluteFill>
+      {fadeAll > 0 && (
+        <AbsoluteFill style={{opacity: fadeAll}}>
+          <AbsoluteFill style={{transform: `scale(${zoom})`, transformOrigin: `${origin.x}px ${origin.y}px`}}>
+            <OffthreadVideo src={staticFile(VIDEO2)} style={{width, height}} />
+          </AbsoluteFill>
+        </AbsoluteFill>
+      )}
 
       <svg width={width} height={height} style={{position: "absolute", inset: 0}}>
+        {fadeAll > 0 && (
+        <>
         {draw > 0.001 && arrowOut > 0 && (
-          <g opacity={arrowOut} style={{filter: `drop-shadow(0 0 ${lw}px ${SAGE})`}}>
+          <g opacity={arrowOut * fadeAll} style={{filter: `drop-shadow(0 0 ${lw}px ${SAGE})`}}>
             <path d={arrowPath} fill="none" stroke={TAN} strokeWidth={lw * 2.2} strokeLinecap="round" pathLength={1} strokeDasharray={`${draw} 2`} />
             <path d={arrowPath} fill="none" stroke={MAIN} strokeWidth={lw} strokeLinecap="round" pathLength={1} strokeDasharray={`${draw} 2`} />
             <polygon
@@ -225,35 +263,54 @@ export const DanceEdit2 = () => {
           </g>
         )}
 
-        <g style={{filter: `drop-shadow(0 0 ${geo.loader.font * 0.25}px ${TAN})`}}>
-          {geo.loader.dots.map((d, i) => {
+        </>
+        )}
+
+        {/* loader: dark backing + ASCII bar; at the end it scrambles into the final text */}
+        <rect x={bcx - bw / 2} y={bcy - bh / 2} width={bw} height={bh} rx={Math.min(bw, bh) * (0.5 - 0.2 * move)} fill={BACKING} opacity={0.94} stroke={TAN} strokeWidth={L.font * 0.1} strokeOpacity={0.6} />
+        <g>
+          {L.dots.map((d, i) => {
+            const slotIdx = L.target.get(i);
+            const slot = slotIdx !== undefined ? L.slots[slotIdx] : undefined;
             const on = d.f <= prog;
-            const swap = d.k % 3 === 0; // main color most of the time, tan accents between
+            const swap = d.k % 3 === 0; // tan most of the time, sage accents between
+            let x = d.x;
+            let y = d.y;
+            let size = L.font;
+            let op = 1;
+            let ch = on ? "#" : "-";
+            let fill = on ? (swap ? SAGE : TAN) : MID;
+            if (!on) op = 0.9;
+            if (scr) {
+              const lock = slot ? SCRAMBLE_START + MOVE * 0.6 + (slotIdx! / L.slots.length) * (RESOLVE_END - SCRAMBLE_START - MOVE * 0.6) : 0;
+              const settled = slot && t >= lock;
+              ch = settled ? slot!.ch : SCRAMBLE_CHARS[Math.floor(random(`scr-${i}-${Math.floor(frame / 2)}`) * SCRAMBLE_CHARS.length)];
+              fill = TAN;
+              if (slot) {
+                x = d.x + (slot.x - d.x) * move;
+                y = d.y + (slot.y - d.y) * move;
+                size = L.font + (L.fFont - L.font) * move;
+              } else {
+                op = 1 - interpolate(t, [SCRAMBLE_START, SCRAMBLE_START + MOVE * 0.8], [0, 1], clamp); // spare characters dissolve
+                size = L.font * op;
+              }
+            }
+            if (op <= 0.01) return null;
             return (
-              <text
-                key={i}
-                x={d.x}
-                y={d.y}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fontFamily={fontFamily}
-                fontWeight={800}
-                fontSize={geo.loader.font}
-                fill={on ? (swap ? TAN : MAIN) : SAGE}
-                stroke={on ? (swap ? MAIN : TAN) : "none"}
-                strokeWidth={geo.loader.font * 0.12}
-                paintOrder="stroke"
-                opacity={on ? 1 : 0.55}
-              >
-                {d.ring ? (on ? "#" : "o") : on ? "+" : "."}
+              <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="central" fontFamily={fontFamily} fontWeight={800} fontSize={size} fill={fill} opacity={op}>
+                {ch}
               </text>
             );
           })}
-          <text x={geo.loader.lcx} y={geo.loader.lcy} textAnchor="middle" dominantBaseline="central" fontFamily={fontFamily} fontWeight={800} fontSize={geo.loader.D * 0.14} fill={MAIN} stroke={TAN} strokeWidth={geo.loader.D * 0.02} paintOrder="stroke">
-            {Math.round(prog * 100)}%
-          </text>
+          {percentOp > 0.01 && (
+            <text x={L.bx0 + (PCT_COLS / 2) * L.step} y={L.lcy} textAnchor="middle" dominantBaseline="central" fontFamily={fontFamily} fontWeight={800} fontSize={L.font * 1.1} fill={TAN} opacity={percentOp}>
+              {Math.round(prog * 100)}%
+            </text>
+          )}
         </g>
 
+        {fadeAll > 0 && (
+        <g opacity={fadeAll}>
         {ITEMS.map((it, k) => {
           const {letters, font, bx, by} = geo.laid[k];
           if (frame === Math.round(it.from * fps)) console.log(`[DanceEdit2] "${it.text}" fades in ${it.from}s -> ${it.to}s`);
@@ -295,6 +352,8 @@ export const DanceEdit2 = () => {
             </g>
           );
         })}
+        </g>
+        )}
       </svg>
     </AbsoluteFill>
   );
