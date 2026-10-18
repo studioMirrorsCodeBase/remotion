@@ -19,6 +19,7 @@ window.addEventListener("unhandledrejection", (e) => showCrash(String(e.reason))
 
 const check = (text: string): {errors: string[]; warnings: string[]} => {
   try {
+      if (!text.trim()) return {errors: ["No JSON yet. Paste it in the box above."], warnings: []};
     return validateSpec(JSON.parse(text));
   } catch (e) {
     return {errors: [`JSON syntax: ${(e as Error).message}`], warnings: []};

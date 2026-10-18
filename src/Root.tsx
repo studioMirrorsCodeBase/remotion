@@ -9,7 +9,6 @@ import {NatashaBubble} from "./NatashaBubble";
 import {NatashaComic} from "./NatashaComic";
 import {ComicEdit} from "./ComicEdit";
 import {validateAgainstVideo, validateSpec, type Spec} from "./spec";
-import natasja from "../scripts/natasja.json";
 
 const FPS = 30;
 const DANCE2_MIN_SECONDS = 25; // DanceEdit2 ends with the scramble at ~24.1s, so the video is at least this long
@@ -79,7 +78,7 @@ export const Root = () => {
         fps={FPS}
         width={1080}
         height={1920}
-        defaultProps={natasja as unknown as Spec}
+        defaultProps={{} as Spec}
         calculateMetadata={async ({props}) => {
           // the props ARE the JSON: check it first, stop with every problem listed
           const {errors, warnings} = validateSpec(props);

@@ -42,6 +42,10 @@ type Uploaded = {url: string; name: string};
 
 const parse = (text: string): {spec?: Spec; errors: string[]} => {
   try {
+      if (!text.trim()) {
+    console.log("[Preview] parse: no JSON yet");
+    return {errors: ["No JSON yet. Paste it in the editor tab."]};
+  }
     const raw = JSON.parse(text);
     const {errors} = validateSpec(raw);
     console.log(`[Preview] parse: ${errors.length} problem(s)`);
@@ -69,6 +73,71 @@ const Preview = () => {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [metaErr, setMetaErr] = useState("");
   const [shown, setShown] = useState<{spec: Spec; meta: Meta; src: string} | null>(null); // last good version stays on screen
+    const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState("");
+  const [renderLog, setRenderLog] = useState<string[]>([]);
+
+  // Export: upload the picked video, send the JSON that is on screen, stream the render log, then download comic.mp4
+  const exportVideo = async () => {
+    if (!shown || exporting) return;
+    setExporting(true);
+    setRenderLog([]);
+    let spec = shown.spec;
+    try {
+      if (uploaded) {
+        setExportMsg("Uploading the video...");
+        const f = await loadVideo();
+        if (f) {
+          console.log(`[Preview] export: uploading ${f.name} (${(f.size / 1e6).toFixed(1)} MB)`);
+          const up = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}`, {method: "POST", body: f});
+          if (!up.ok) throw new Error(`upload failed: ${up.status} ${await up.text()}`);
+          const {file} = await up.json();
+          console.log(`[Preview] export: server saved it as public/${file}`);
+          spec = {...spec, video: {file}}; // the render reads public/<file>
+        }
+      } else console.log(`[Preview] export: no picked video, the render uses public/${spec.video.file}`);
+
+      setExportMsg("Rendering... (the first time can take a while)");
+      console.log("[Preview] export: starting the render");
+      const res = await fetch("/api/render", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(spec)});
+      if (!res.ok || !res.body) throw new Error(`render request failed: ${res.status} ${await res.text()}`);
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let done = false;
+      let failed = "";
+      const line = (l: string) => {
+        console.log("[Preview] render:", l);
+        setRenderLog((old) => [...old.slice(-11), l]);
+        if (l.includes("[RENDER DONE]")) done = true;
+        if (l.includes("[RENDER FAILED]")) failed = l;
+      };
+      for (;;) {
+        const {done: end, value} = await reader.read();
+        if (end) break;
+        buf += dec.decode(value, {stream: true});
+        const parts = buf.split(/[\r\n]+/);
+        buf = parts.pop() ?? "";
+        parts.filter(Boolean).forEach(line);
+      }
+      if (buf.trim()) line(buf.trim());
+
+      if (done) {
+        console.log("[Preview] export: render done, downloading comic.mp4");
+        setExportMsg("Done. Downloading comic.mp4 (also saved in out/comic.mp4)");
+        const a = document.createElement("a");
+        a.href = `/api/download?t=${Date.now()}`;
+        a.download = "comic.mp4";
+        a.click();
+      } else throw new Error(failed || "the render ended without finishing, see the log below");
+    } catch (e) {
+      console.error("[Preview] export failed", e);
+      setExportMsg(`Export failed: ${(e as Error).message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const readUploaded = () => {
     console.log("[Preview] reading the stored video from IndexedDB...");
@@ -152,6 +221,17 @@ const Preview = () => {
           {errors.length > 1 ? ` (+${errors.length - 1} more, see the editor tab)` : ""}
         </div>
       )}
+
+            <div style={{display: "flex", gap: 12, alignItems: "center"}}>
+        <button onClick={exportVideo} disabled={exporting} style={{padding: "8px 16px", fontSize: 14, cursor: exporting ? "wait" : "pointer"}}>
+          {exporting ? "Exporting..." : "Export video"}
+        </button>
+        {exportMsg && <span style={{fontSize: 13}}>{exportMsg}</span>}
+      </div>
+      {renderLog.length > 0 && (
+        <pre style={{margin: 0, maxWidth: "90vw", maxHeight: 160, overflow: "auto", fontSize: 11, background: "#1e1830", padding: 8}}>{renderLog.join("\n")}</pre>
+      )}
+
       <div style={{height: "92vh", aspectRatio: `${m.w} / ${m.h}`}}>
         <Player
           key={`${shown.src}-${m.w}x${m.h}-${spec.fps}`}
