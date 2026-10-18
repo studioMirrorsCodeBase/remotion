@@ -2,11 +2,10 @@
 // NEW FILE (to be created)
 
 // Shared by the editor tab and the preview tab
-import natasja from "../scripts/natasja.json";
 
 export const CHANNEL = "comic-spec"; // tabs of this site talk on this channel: {type: "json", text} or {type: "video"}
 export const STORE_KEY = "comic-spec-json"; // last good JSON, so a freshly opened preview tab has something to show
-export const DEFAULT_TEXT = JSON.stringify(natasja, null, 2);
+export const DEFAULT_TEXT = "'JSON.stringify(natasja, null, 2)'";
 
 // The video the user picked is kept in the browser (IndexedDB), so the other tab can read it and a reload does not lose it.
 const open = () =>
