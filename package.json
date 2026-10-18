@@ -10,18 +10,25 @@
     "edit": "remotion render DanceEdit out/edit.mp4",
     "edit2": "remotion render DanceEdit2 out/edit2.mp4",
     "natasha": "remotion render NatashaEdit out/natasha.mp4",
-    "bubble": "remotion render NatashaBubble out/bubble.mp4 --concurrency=2"
+    "bubble": "remotion render NatashaBubble out/bubble.mp4 --concurrency=2",
+    "comic": "remotion render NatashaComic out/comic.mp4 --concurrency=2",
+    "app": "vite --config app/vite.config.ts",
+    "comicjson": "remotion render ComicEdit out/comicjson.mp4 --props=scripts/natasja.json --concurrency=2"
   },
   "dependencies": {
     "@remotion/cli": "^4.0.0",
     "@remotion/google-fonts": "^4.0.0",
     "@remotion/media-utils": "^4.0.0",
+    "@remotion/player": "^4.0.535",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "remotion": "^4.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",
-    "typescript": "^5.4.0"
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.4.0"
   }
 }
