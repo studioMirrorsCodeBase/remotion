@@ -1,7 +1,7 @@
 // app/preview.tsx
-// NOT NEW: existing file, changed (waits for the browser-stored video before trying public/, ignores stale results, generous logging, crash shown on the page)
+// NOT NEW: existing file, changed (reads the picture picked in the editor and passes it to ComicEdit; the export also uploads the picture)
 
-// Tab 2: plays the video with the captions on top (the same ComicEdit that Remotion renders), updates live when the editor tab sends new JSON or a new video.
+// Tab 2: plays the video with the captions on top (the same ComicEdit that Remotion renders), updates live when the editor tab sends new JSON, a new video or a new picture.
 import {Component, useEffect, useMemo, useState, type ReactNode} from "react";
 import {createRoot} from "react-dom/client";
 import {Player} from "@remotion/player";
@@ -9,7 +9,7 @@ import {getVideoMetadata} from "@remotion/media-utils";
 import {staticFile} from "remotion";
 import {ComicEdit} from "../src/ComicEdit";
 import {validateAgainstVideo, validateSpec, type Spec} from "../src/spec";
-import {CHANNEL, DEFAULT_TEXT, loadVideo, STORE_KEY} from "./shared";
+import {CHANNEL, DEFAULT_TEXT, loadPicture, loadVideo, STORE_KEY} from "./shared";
 
 console.log("[Preview] 1. file loaded, all imports resolved");
 
@@ -41,11 +41,11 @@ type Meta = {w: number; h: number; seconds: number};
 type Uploaded = {url: string; name: string};
 
 const parse = (text: string): {spec?: Spec; errors: string[]} => {
-  try {
-      if (!text.trim()) {
+  if (!text.trim()) {
     console.log("[Preview] parse: no JSON yet");
     return {errors: ["No JSON yet. Paste it in the editor tab."]};
   }
+  try {
     const raw = JSON.parse(text);
     const {errors} = validateSpec(raw);
     console.log(`[Preview] parse: ${errors.length} problem(s)`);
@@ -61,7 +61,7 @@ const Preview = () => {
   const [text, setText] = useState(() => {
     try {
       const saved = localStorage.getItem(STORE_KEY);
-      console.log(`[Preview] start JSON from ${saved ? "localStorage (sent by the editor)" : "DEFAULT_TEXT (scripts/natasja.json)"}`);
+      console.log(`[Preview] start JSON from ${saved ? "localStorage (sent by the editor)" : "DEFAULT_TEXT"}`);
       return saved ?? DEFAULT_TEXT;
     } catch (e) {
       console.error("[Preview] localStorage failed", e);
@@ -69,15 +69,97 @@ const Preview = () => {
     }
   });
   const [uploaded, setUploaded] = useState<Uploaded | null>(null); // the video picked in the editor tab
+  const [picture, setPicture] = useState<Uploaded | null>(null); // the picture picked in the editor tab
   const [checked, setChecked] = useState(false); // true once the browser-stored video has been looked for
   const [meta, setMeta] = useState<Meta | null>(null);
   const [metaErr, setMetaErr] = useState("");
   const [shown, setShown] = useState<{spec: Spec; meta: Meta; src: string} | null>(null); // last good version stays on screen
-    const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState("");
   const [renderLog, setRenderLog] = useState<string[]>([]);
 
-  // Export: upload the picked video, send the JSON that is on screen, stream the render log, then download comic.mp4
+  const readUploaded = () => {
+    console.log("[Preview] reading the stored video from IndexedDB...");
+    return loadVideo()
+      .then((f) => {
+        console.log(`[Preview] stored video: ${f ? `${f.name}, ${(f.size / 1e6).toFixed(1)} MB, type "${f.type}"` : "none"}`);
+        setUploaded(f ? {url: URL.createObjectURL(f), name: f.name} : null);
+      })
+      .catch((e) => console.error("[Preview] cannot read the stored video", e))
+      .finally(() => {
+        console.log("[Preview] stored-video check finished");
+        setChecked(true);
+      });
+  };
+
+  const readPicture = () => {
+    console.log("[Preview] reading the stored picture from IndexedDB...");
+    return loadPicture()
+      .then((f) => {
+        console.log(`[Preview] stored picture: ${f ? `${f.name}, ${(f.size / 1e3).toFixed(0)} KB, type "${f.type}"` : "none"}`);
+        setPicture(f ? {url: URL.createObjectURL(f), name: f.name} : null);
+      })
+      .catch((e) => console.error("[Preview] cannot read the stored picture", e));
+  };
+
+  useEffect(() => {
+    console.log(`[Preview] 4. effect: opening channel "${CHANNEL}", reading the stored video and picture`);
+    readUploaded();
+    readPicture();
+    const ch = new BroadcastChannel(CHANNEL);
+    ch.onmessage = (e) => {
+      console.log(`[Preview] message from the editor: ${e.data.type}`);
+      if (e.data.type === "json") setText(e.data.text);
+      if (e.data.type === "video") readUploaded();
+      if (e.data.type === "picture") readPicture();
+    };
+    return () => ch.close();
+  }, []);
+  useEffect(() => () => void (uploaded && URL.revokeObjectURL(uploaded.url)), [uploaded]);
+  useEffect(() => () => void (picture && URL.revokeObjectURL(picture.url)), [picture]);
+
+  const parsed = useMemo(() => parse(text), [text]);
+  const file = parsed.spec?.video.file;
+  const src = uploaded ? uploaded.url : checked && file ? staticFile(file) : ""; // public/ is only tried after the stored video was looked for
+  console.log(`[Preview] source: ${uploaded ? `uploaded "${uploaded.name}"` : src ? `public/${file}` : "nothing yet"}, picture: ${picture ? picture.name : "none"}`);
+
+  useEffect(() => {
+    if (!src) {
+      console.log("[Preview] no video source yet, skipping metadata");
+      return;
+    }
+    let stale = false; // a newer source replaced this one: ignore its result
+    console.log(`[Preview] 5. reading video metadata from ${src}`);
+    setMeta(null);
+    setMetaErr("");
+    getVideoMetadata(src)
+      .then((m) => {
+        if (stale) return console.log("[Preview] ignoring a stale metadata result");
+        console.log(`[Preview] video ${uploaded ? uploaded.name : file}: ${m.width}x${m.height}, ${m.durationInSeconds.toFixed(3)}s`);
+        setMeta({w: m.width, h: m.height, seconds: m.durationInSeconds});
+      })
+      .catch((e) => {
+        if (stale) return console.log("[Preview] ignoring a stale metadata error");
+        console.error("[Preview] video metadata failed", e);
+        setMetaErr(uploaded ? `Cannot read the chosen video (${e?.message ?? e})` : `No video chosen, and "${file}" is not in the public folder (${e?.message ?? e})`);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [src]);
+
+  const videoErrors = parsed.spec && meta ? validateAgainstVideo(parsed.spec, meta.seconds) : [];
+  const errors = [...parsed.errors, ...videoErrors, ...(metaErr ? [metaErr] : [])];
+  if (errors.length) console.log(`[Preview] ${errors.length} problem(s) blocking an update:`, errors);
+
+  useEffect(() => {
+    if (parsed.spec && meta && errors.length === 0) {
+      console.log("[Preview] 6. everything is valid, showing new version");
+      setShown({spec: parsed.spec, meta, src});
+    }
+  }, [parsed.spec, meta, errors.length]);
+
+  // Export: upload the picked video and picture, send the JSON that is on screen, stream the render log, then download comic.mp4
   const exportVideo = async () => {
     if (!shown || exporting) return;
     setExporting(true);
@@ -88,14 +170,27 @@ const Preview = () => {
         setExportMsg("Uploading the video...");
         const f = await loadVideo();
         if (f) {
-          console.log(`[Preview] export: uploading ${f.name} (${(f.size / 1e6).toFixed(1)} MB)`);
+          console.log(`[Preview] export: uploading video ${f.name} (${(f.size / 1e6).toFixed(1)} MB)`);
           const up = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}`, {method: "POST", body: f});
-          if (!up.ok) throw new Error(`upload failed: ${up.status} ${await up.text()}`);
-          const {file} = await up.json();
-          console.log(`[Preview] export: server saved it as public/${file}`);
-          spec = {...spec, video: {file}}; // the render reads public/<file>
+          if (!up.ok) throw new Error(`video upload failed: ${up.status} ${await up.text()}`);
+          const {file: saved} = await up.json();
+          console.log(`[Preview] export: server saved the video as public/${saved}`);
+          spec = {...spec, video: {file: saved}}; // the render reads public/<file>
         }
       } else console.log(`[Preview] export: no picked video, the render uses public/${spec.video.file}`);
+
+      if (picture) {
+        setExportMsg("Uploading the picture...");
+        const pf = await loadPicture();
+        if (pf) {
+          console.log(`[Preview] export: uploading picture ${pf.name} (${(pf.size / 1e3).toFixed(0)} KB)`);
+          const up = await fetch(`/api/upload?name=${encodeURIComponent("picture-" + pf.name)}`, {method: "POST", body: pf});
+          if (!up.ok) throw new Error(`picture upload failed: ${up.status} ${await up.text()}`);
+          const {file: saved} = await up.json();
+          console.log(`[Preview] export: server saved the picture as public/${saved}`);
+          spec = {...spec, picture: {file: saved}};
+        }
+      } else console.log(`[Preview] export: no picked picture${spec.picture ? `, the render uses public/${spec.picture.file}` : ""}`);
 
       setExportMsg("Rendering... (the first time can take a while)");
       console.log("[Preview] export: starting the render");
@@ -139,74 +234,6 @@ const Preview = () => {
     }
   };
 
-  const readUploaded = () => {
-    console.log("[Preview] reading the stored video from IndexedDB...");
-    return loadVideo()
-      .then((f) => {
-        console.log(`[Preview] stored video: ${f ? `${f.name}, ${(f.size / 1e6).toFixed(1)} MB, type "${f.type}"` : "none"}`);
-        setUploaded(f ? {url: URL.createObjectURL(f), name: f.name} : null);
-      })
-      .catch((e) => console.error("[Preview] cannot read the stored video", e))
-      .finally(() => {
-        console.log("[Preview] stored-video check finished");
-        setChecked(true);
-      });
-  };
-
-  useEffect(() => {
-    console.log(`[Preview] 4. effect: opening channel "${CHANNEL}" and reading the stored video`);
-    readUploaded();
-    const ch = new BroadcastChannel(CHANNEL);
-    ch.onmessage = (e) => {
-      console.log(`[Preview] message from the editor: ${e.data.type}`);
-      if (e.data.type === "json") setText(e.data.text);
-      if (e.data.type === "video") readUploaded();
-    };
-    return () => ch.close();
-  }, []);
-  useEffect(() => () => void (uploaded && URL.revokeObjectURL(uploaded.url)), [uploaded]);
-
-  const parsed = useMemo(() => parse(text), [text]);
-  const file = parsed.spec?.video.file;
-  const src = uploaded ? uploaded.url : checked && file ? staticFile(file) : ""; // public/ is only tried after the stored video was looked for
-  console.log(`[Preview] source: ${uploaded ? `uploaded "${uploaded.name}"` : src ? `public/${file}` : "nothing yet"}`);
-
-  useEffect(() => {
-    if (!src) {
-      console.log("[Preview] no video source yet, skipping metadata");
-      return;
-    }
-    let stale = false; // a newer source replaced this one: ignore its result
-    console.log(`[Preview] 5. reading video metadata from ${src}`);
-    setMeta(null);
-    setMetaErr("");
-    getVideoMetadata(src)
-      .then((m) => {
-        if (stale) return console.log("[Preview] ignoring a stale metadata result");
-        console.log(`[Preview] video ${uploaded ? uploaded.name : file}: ${m.width}x${m.height}, ${m.durationInSeconds.toFixed(3)}s`);
-        setMeta({w: m.width, h: m.height, seconds: m.durationInSeconds});
-      })
-      .catch((e) => {
-        if (stale) return console.log("[Preview] ignoring a stale metadata error");
-        console.error("[Preview] video metadata failed", e);
-        setMetaErr(uploaded ? `Cannot read the chosen video (${e?.message ?? e})` : `No video chosen, and "${file}" is not in the public folder (${e?.message ?? e})`);
-      });
-    return () => {
-      stale = true;
-    };
-  }, [src]);
-
-  const videoErrors = parsed.spec && meta ? validateAgainstVideo(parsed.spec, meta.seconds) : [];
-  const errors = [...parsed.errors, ...videoErrors, ...(metaErr ? [metaErr] : [])];
-  if (errors.length) console.log(`[Preview] ${errors.length} problem(s) blocking an update:`, errors);
-
-  useEffect(() => {
-    if (parsed.spec && meta && errors.length === 0) {
-      console.log("[Preview] 6. everything is valid, showing new version");
-      setShown({spec: parsed.spec, meta, src});
-    }
-  }, [parsed.spec, meta, errors.length]);
-
   if (!shown) {
     console.log(`[Preview] nothing to show yet (${errors.length ? "errors" : "still loading"})`);
     return <div style={{padding: 24}}>{errors.length ? errors.map((e, i) => <p key={i} style={{color: "#ff7a7a"}}>{e}</p>) : "Loading the video..."}</div>;
@@ -221,8 +248,7 @@ const Preview = () => {
           {errors.length > 1 ? ` (+${errors.length - 1} more, see the editor tab)` : ""}
         </div>
       )}
-
-            <div style={{display: "flex", gap: 12, alignItems: "center"}}>
+      <div style={{display: "flex", gap: 12, alignItems: "center"}}>
         <button onClick={exportVideo} disabled={exporting} style={{padding: "8px 16px", fontSize: 14, cursor: exporting ? "wait" : "pointer"}}>
           {exporting ? "Exporting..." : "Export video"}
         </button>
@@ -231,12 +257,11 @@ const Preview = () => {
       {renderLog.length > 0 && (
         <pre style={{margin: 0, maxWidth: "90vw", maxHeight: 160, overflow: "auto", fontSize: 11, background: "#1e1830", padding: 8}}>{renderLog.join("\n")}</pre>
       )}
-
       <div style={{height: "92vh", aspectRatio: `${m.w} / ${m.h}`}}>
         <Player
           key={`${shown.src}-${m.w}x${m.h}-${spec.fps}`}
           component={ComicEdit}
-          inputProps={{...spec, videoSrc: shown.src}}
+          inputProps={{...spec, videoSrc: shown.src, pictureSrc: picture?.url}}
           durationInFrames={Math.ceil(m.seconds * spec.fps)}
           fps={spec.fps}
           compositionWidth={m.w}
@@ -247,7 +272,6 @@ const Preview = () => {
             console.error("[Preview] Player error:", error);
             return <span style={{color: "#ff7a7a"}}>Player error: {error.message}</span>;
           }}
-          onError={(e) => console.error("[Preview] Player onError:", e)}
         />
       </div>
     </div>

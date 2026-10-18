@@ -1,5 +1,5 @@
 // src/bubbleTimeline.ts
-// NOT NEW: existing file, changed (timing can now come from the JSON; the old calls without timing still work)
+// NOT NEW: existing file, changed (chaining removed again: back to the version from before the chaining)
 
 // Where is the ONE bubble at time t? Pure math (no Remotion) so it can be tested on its own.
 import type {Timing} from "./spec";

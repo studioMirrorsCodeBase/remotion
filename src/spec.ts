@@ -17,6 +17,7 @@ export type Zoom = {from: number; to: number; percent: number; cells: string[]; 
 export type Spec = {
   version: 1;
   video: {file: string};
+  picture?: {file: string}; // optional: the photo for the name bubble (a file name in the public folder)
   grid: {size: number};
   fps: number;
   style: {
@@ -57,9 +58,10 @@ export const validateSpec = (raw: unknown): {errors: string[]; warnings: string[
 
   if (!isObj(raw)) return {errors: ["the JSON must be an object { ... }"], warnings};
   const s = raw;
-  keys(s, ["version", "video", "grid", "fps", "style", "timing", "captions", "zooms", "ending"], "top level");
+    keys(s, ["version", "video", "picture", "grid", "fps", "style", "timing", "captions", "zooms", "ending"], "top level");
   if (s.version !== 1) errors.push("version: must be 1");
   if (!isObj(s.video) || typeof s.video.file !== "string" || !s.video.file || /[\\/]|\.\./.test(s.video.file)) errors.push("video.file: must be a file name inside the public folder (no slashes)");
+    if (s.picture !== undefined && (!isObj(s.picture) || typeof s.picture.file !== "string" || !s.picture.file || /[\\/]|\.\./.test(s.picture.file))) errors.push("picture.file: must be a file name inside the public folder (no slashes)");
   if (!isObj(s.grid) || !Number.isInteger(s.grid.size) || s.grid.size < 2 || s.grid.size > 26) errors.push("grid.size: must be a whole number from 2 to 26");
   num(s.fps, "fps", 1, 120);
   const n = isObj(s.grid) && Number.isInteger(s.grid.size) ? s.grid.size : 15;
@@ -128,7 +130,7 @@ export const validateSpec = (raw: unknown): {errors: string[]; warnings: string[
       const prev = caps[i - 1];
       if (i > 0 && isObj(prev) && isNum(prev.to) && isNum(c.from)) {
         if (c.from <= prev.to) errors.push(`${w}: starts at ${c.from}, before the previous caption is fully in (${prev.to})`);
-        else if (c.from - prev.to < 0.2) warnings.push(`${w}: only ${(c.from - prev.to).toFixed(3)}s after the previous caption, the bubble will flick instead of flow`);
+                 else if (c.from - prev.to < 0.2) warnings.push(`${w}: only ${(c.from - prev.to).toFixed(3)}s after the previous caption, the bubble will flick instead of flow`);
       }
     });
   }

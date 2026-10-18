@@ -1,8 +1,8 @@
 // src/ComicEdit.tsx
-// NEW FILE (to be created). It is src/NatashaComic.tsx with every setting read from the JSON instead of written in the code.
+// NOT NEW: existing file, changed (chaining removed again; adds the NAME BUBBLE for caption id 1; bubble and text size constants at the top)
 
 import {useMemo} from "react";
-import {AbsoluteFill, Easing, interpolate, OffthreadVideo, staticFile, useCurrentFrame, useVideoConfig} from "remotion";
+import {AbsoluteFill, Easing, Img, interpolate, OffthreadVideo, staticFile, useCurrentFrame, useVideoConfig} from "remotion";
 import {loadFont} from "@remotion/google-fonts/ComicNeue"; // the only font the JSON can name for now
 import {cellRect} from "./gridCell";
 import {blobAt, schedule, type Blob} from "./bubbleTimeline";
@@ -10,6 +10,24 @@ import type {Spec} from "./spec";
 
 const {fontFamily} = loadFont("normal", {weights: ["700"]});
 const ADV = 0.66; // average capital-letter width as a fraction of font size (only sizes the bubble)
+
+// ---- BUBBLE SIZE (change here) ----
+// The size of the TEXT in every bubble is in the JSON: style.font.sizeCells. The bubble grows with its text.
+// These four numbers decide how much room the bubble gives the text:
+const BUBBLE_W_SCALE = 1.3; // wider bubble around the same text (1 = tight)
+const BUBBLE_W_PAD = 0.7; // extra half-width, in text sizes
+const BUBBLE_H_SCALE = 1.3; // taller bubble around the same text (1 = tight)
+const BUBBLE_H_PAD = 0.55; // extra half-height, in text sizes
+
+// ---- NAME BUBBLE (the caption with this id gets a picture bubble on top and big words below) ----
+const NAME_BUBBLE_ID = 1;
+const NAME_TEXT_SCALE = 1.6; // its words are this many times bigger than normal text; bigger than the bubble = sticks out
+const NAME_BUBBLE_GROW = 1; // 1.2 = its words bubble is 20% bigger (the words keep their size)
+const NAME_TEXT_TILT = -4; // degrees, 0 = straight
+const NAME_PIC_CELLS = 1.1; // picture bubble radius, in grid cells
+const NAME_PIC_LEFT = 0.35; // picture bubble sits this far left of the center (fraction of the words bubble half-width, negative = right)
+const NAME_PIC_UP = 0.6; // how far above the words bubble: 1 = just touching, smaller = more merged
+const NAME_PIC_INSET = 0.88; // the photo is this fraction of the picture bubble, so a white ring stays around it
 
 type P = {x: number; y: number};
 const bez = (a: P, c: P, b: P, u: number): P => ({
@@ -24,8 +42,8 @@ const centerOf = (cells: string[], w: number, h: number, n: number): P => {
 };
 
 // The whole edit is drawn from the JSON ("spec"): the props ARE the JSON, so --props=scripts/x.json works.
-// videoSrc is only set by the preview tab (a video picked in the browser); a render uses public/<video.file>.
-export const ComicEdit = (spec: Spec & {videoSrc?: string}) => {
+// videoSrc and pictureSrc are only set by the preview tab (files picked in the browser); a render uses public/<video.file> and public/<picture.file>.
+export const ComicEdit = (spec: Spec & {videoSrc?: string; pictureSrc?: string}) => {
   const frame = useCurrentFrame();
   const {fps, width, height, durationInFrames} = useVideoConfig();
   const t = frame / fps;
@@ -34,20 +52,45 @@ export const ComicEdit = (spec: Spec & {videoSrc?: string}) => {
   const N = spec.grid.size;
 
   const sch = useMemo(() => schedule(captions, tm), [captions, tm]);
+  const pictureUrl = spec.pictureSrc ?? (spec.picture ? staticFile(spec.picture.file) : undefined);
+  if (frame === 0) console.log(`[Comic] name bubble = caption #${NAME_BUBBLE_ID}, picture: ${pictureUrl ? (spec.pictureSrc ? "picked in the editor" : `public/${spec.picture?.file}`) : "NOT set (the top bubble stays empty)"}`);
 
   const geo = useMemo(() => {
     const cw = width / N;
     const font = style.font.sizeCells * cw;
     const lineH = font * 1.15;
+    const margin = cw * 0.3;
     const items = captions.map((cap) => {
-      const c = centerOf(cap.cells, width, height, N);
+      let c = centerOf(cap.cells, width, height, N);
       const tr = cellRect(cap.tail ?? style.tail.defaultTarget, width, height, N);
       const lines = (style.font.capitals ? cap.text.toUpperCase() : cap.text).split(" "); // one word per line
       const longest = Math.max(...lines.map((l) => l.length));
-      const rx = ((longest * font * ADV) / 2) * 1.3 + font * 0.7; // bubble half-width
-      const ry = ((lines.length * lineH) / 2) * 1.3 + font * 0.55; // bubble half-height
-      console.log(`[Comic] #${cap.id} "${cap.text}" at ${cap.cells.join("+")} bubble ${(rx * 2).toFixed(0)}x${(ry * 2).toFixed(0)}px`);
-      return {c, tail: {x: tr.cx, y: tr.cy}, rx, ry, lines};
+      const isName = cap.id === NAME_BUBBLE_ID;
+      const bg = isName ? NAME_BUBBLE_GROW : 1;
+      const rx = (((longest * font * ADV) / 2) * BUBBLE_W_SCALE + font * BUBBLE_W_PAD) * bg; // bubble half-width
+      const ry = (((lines.length * lineH) / 2) * BUBBLE_H_SCALE + font * BUBBLE_H_PAD) * bg; // bubble half-height
+      const fs = isName ? font * NAME_TEXT_SCALE : font; // text size in px
+      const lh = isName ? lineH * NAME_TEXT_SCALE : lineH; // distance between the lines
+
+      let pic: {x: number; y: number; rp: number} | undefined; // the picture bubble of the name bubble
+      if (isName) {
+        const rp = NAME_PIC_CELLS * cw;
+        const textHalf = (longest * fs * ADV) / 2; // the big words can be wider than the bubble
+        let px = c.x - rx * NAME_PIC_LEFT;
+        let py = c.y - ry - rp * NAME_PIC_UP;
+        const left = Math.min(c.x - Math.max(rx, textHalf), px - rp);
+        const right = Math.max(c.x + Math.max(rx, textHalf), px + rp);
+        const top = Math.min(c.y - ry, py - rp);
+        const bottom = Math.max(c.y + ry, py + rp);
+        const dx = left < margin ? margin - left : right > width - margin ? width - margin - right : 0; // keep both bubbles in the frame
+        const dy = top < margin ? margin - top : bottom > height - margin ? height - margin - bottom : 0;
+        c = {x: c.x + dx, y: c.y + dy};
+        px += dx;
+        py += dy;
+        pic = {x: px, y: py, rp};
+        console.log(`[Comic] #${cap.id} NAME BUBBLE: words bubble ${(rx * 2).toFixed(0)}x${(ry * 2).toFixed(0)}px at ${c.x.toFixed(0)},${c.y.toFixed(0)}, text ${fs.toFixed(0)}px (normal ${font.toFixed(0)}px), picture circle r=${rp.toFixed(0)}px at ${px.toFixed(0)},${py.toFixed(0)}${dx || dy ? `, moved ${dx.toFixed(0)},${dy.toFixed(0)} to fit the frame` : ""}`);
+      } else console.log(`[Comic] #${cap.id} "${cap.text}" at ${cap.cells.join("+")} bubble ${(rx * 2).toFixed(0)}x${(ry * 2).toFixed(0)}px`);
+      return {c, tail: {x: tr.cx, y: tr.cy}, rx, ry, lines, fs, lh, pic};
     });
     // smooth curve from each bubble to the next: control point bows to the upper side
     const hops = items.slice(0, -1).map((a, k) => {
@@ -61,7 +104,7 @@ export const ComicEdit = (spec: Spec & {videoSrc?: string}) => {
       return {A: a.c, B: b.c, C};
     });
     const zoomList = [...zooms].sort((a, b) => a.from - b.from).map((z) => ({...z, origin: centerOf(z.cells, width, height, N)}));
-    return {cw, font, lineH, items, hops, zooms: zoomList};
+    return {cw, items, hops, zooms: zoomList};
   }, [captions, style, zooms, N, width, height]);
 
   // key moments, logged once each
@@ -94,6 +137,13 @@ export const ComicEdit = (spec: Spec & {videoSrc?: string}) => {
       const rx = (R + (g.rx - R) * b.o) * b.sc + grow * b.sc;
       const ry = (R + (g.ry - R) * b.o) * b.sc + grow * b.sc;
 
+      // name bubble: the picture bubble starts inside the ball and moves up-left while it grows
+      let pic = null;
+      if (g.pic) {
+        const rp = (R + (g.pic.rp - R) * b.o) * b.sc + grow * b.sc;
+        pic = <circle cx={g.c.x + (g.pic.x - g.c.x) * b.o} cy={g.c.y + (g.pic.y - g.c.y) * b.o} r={rp} fill={color} />;
+      }
+
       // comic tail: a thin curved spike from the bubble edge toward the target cell, grows as the bubble opens
       let tail = null;
       if (style.tail.enabled && b.o > 0.02) {
@@ -116,6 +166,7 @@ export const ComicEdit = (spec: Spec & {videoSrc?: string}) => {
       return (
         <>
           {tail}
+          {pic}
           <ellipse cx={g.c.x} cy={g.c.y} rx={rx} ry={ry} fill={color} />
         </>
       );
@@ -137,6 +188,25 @@ export const ComicEdit = (spec: Spec & {videoSrc?: string}) => {
     );
   };
 
+  // the photo inside the picture bubble (a Remotion <Img> inside the SVG, so a render waits until it is loaded)
+  const pictureLayer = () => {
+    if (!blob || blob.kind !== "cell" || !pictureUrl) return null;
+    const g = geo.items[blob.k];
+    if (!g.pic) return null;
+    const px = g.c.x + (g.pic.x - g.c.x) * blob.o;
+    const py = g.c.y + (g.pic.y - g.c.y) * blob.o;
+    const r = (R + (g.pic.rp - R) * blob.o) * blob.sc * NAME_PIC_INSET;
+    const a = Math.max(0, Math.min(1, (blob.o - 0.7) / 0.3)); // the photo fades in when the bubble is nearly open
+    if (a <= 0 || r < 2) return null;
+    return (
+      <foreignObject x={px - r} y={py - r} width={2 * r} height={2 * r} style={{opacity: a}}>
+        <div style={{width: "100%", height: "100%", borderRadius: "50%", overflow: "hidden"}}>
+          <Img src={pictureUrl} style={{width: "100%", height: "100%", objectFit: "cover"}} />
+        </div>
+      </foreignObject>
+    );
+  };
+
   return (
     <AbsoluteFill style={{background: "black"}}>
       <AbsoluteFill style={{opacity: endFade, transform: `scale(${zoom})`, transformOrigin: `${origin.x}px ${origin.y}px`}}>
@@ -150,34 +220,49 @@ export const ComicEdit = (spec: Spec & {videoSrc?: string}) => {
             {draw(blob, style.fill, 0)}
           </g>
         )}
+        {pictureLayer()}
 
         {captions.map((cap, k) => {
           const out = sch[k].out;
           if (t < cap.from || t >= out) return null;
           const span = Math.max(cap.to - cap.from, 0.05);
           const exit = interpolate(t, [out - tm.exitFadeSeconds, out], [1, 0], clamp);
-          const {c, lines} = geo.items[k];
-          return lines.map((line, li) => {
+          const {c, lines, fs, lh, pic} = geo.items[k];
+          const isName = !!pic;
+          const rows = lines.map((line, li) => {
             const t0 = cap.from + (lines.length > 1 ? li / (lines.length - 1) : 0) * 0.4 * span; // soft stagger, one word at a time
             const p = interpolate(t, [t0, t0 + 0.6 * span], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
             if (p <= 0) return null;
-            return (
-              <text
-                key={`${k}-${li}`}
-                x={c.x}
-                y={c.y + (li - (lines.length - 1) / 2) * geo.lineH + (1 - p) * geo.font * 0.25}
-                opacity={p * exit}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fontFamily={fontFamily}
-                fontWeight={700}
-                fontSize={geo.font}
-                fill={style.ink}
-              >
+            const common = {
+              x: c.x,
+              y: c.y + (li - (lines.length - 1) / 2) * lh + (1 - p) * fs * 0.25,
+              textAnchor: "middle",
+              dominantBaseline: "central",
+              fontFamily,
+              fontWeight: 700,
+              fontSize: fs,
+            } as const;
+            // name bubble words: fill color with a thick ink outline and an offset shadow, like a POW burst
+            return isName ? (
+              <g key={`${k}-${li}`} opacity={p * exit}>
+                <text {...common} transform={`translate(${fs * 0.05} ${fs * 0.07})`} fill={style.ink} stroke={style.ink} strokeWidth={fs * 0.2} strokeLinejoin="round">
+                  {line}
+                </text>
+                <text {...common} fill={style.fill} stroke={style.ink} strokeWidth={fs * 0.14} strokeLinejoin="round" paintOrder="stroke">
+                  {line}
+                </text>
+              </g>
+            ) : (
+              <text key={`${k}-${li}`} {...common} opacity={p * exit} fill={style.ink}>
                 {line}
               </text>
             );
           });
+          return (
+            <g key={k} transform={isName && NAME_TEXT_TILT ? `rotate(${NAME_TEXT_TILT} ${c.x} ${c.y})` : undefined}>
+              {rows}
+            </g>
+          );
         })}
       </svg>
     </AbsoluteFill>
