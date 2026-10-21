@@ -1,0 +1,2 @@
+- add an easy copy button for usernames in video vault
+- make a small zoom towards each spoken action
